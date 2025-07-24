@@ -1,20 +1,56 @@
-#Requires -RunAsAdministrator
+[CmdletBinding()]
 param(
+    [Parameter(Mandatory=$true)]
     [string]$OrgUnit,
-    [string]$GroupType,
-    [switch]$SavetoFile
+    [Parameter()]
+    [ValidateSet("Universal", "DomainLocal")]
+    [string]$GroupType = "Universal",
+    [Parameter()]
+    [bool]$SavetoFile = $false
 )
 
 
+# Elevate session if not running with privileged rights
+#[Security.Principal.WindowsIdentity]::GetCurrent()
+# if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([security.principal.windowsbuiltinrole]::Administrator))
+# {
+#     Write-Host "Process requires elevated rights...`n`tElevating to administrator..."
+#     $argsList = @(
+#         "-NoProfile",
+#         "-ExecutionPolicy Bypass",
+#         "-File $PSCommandPath"
+#     )
 
+#     $PSBoundParameters.GetEnumerator() | ForEach-Object {
+#         $argsList += "-$($_.Key) `"$($_.Value)`""
 
+#         #$argsList += "-$($_.Key)"
+#         #$argsList += "`"$($_.Value)`""
+#     }
+
+#     Write-Host $argsList
+
+#     Start-Process -FilePath "powershell.exe" -ArgumentList $argsList -Verb runas -NoNewWindow:$true
+#     Stop-Process -Id $PID -Force
+# }
+
+pause
+
+if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+    Write-Host "Process requires elevated rights...`n`tElevating to administrator..."
+
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-File `"$($PSCommandPath)`" -OrgUnit `"$($OrgUnit)`" -GroupType $($GroupType)" -Verb runas
+    Stop-Process -Id $PID -Force
+}
+
+pause
 
 #Global Variables
 $Global:PreMigrationReport = "$env:USERPROFILE\Documents\PreMigrationReport_ADGroups.csv"
 $Global:PreCloudGroupRemovalReport = "$env:USERPROFILE\Documents\PreCloudRemovalReport_M365Groups.csv"
 $global:TimeStamp = (Get-Date).ToString("MM/dd/yyyy HH:mm:ss")
 
-
+pause
 
 function New-MigrationLog {
     param(
@@ -111,7 +147,6 @@ function Get-TargetADGroups {
             }
             
         }
-         
     }
     if ($SavetoFile){
 
@@ -119,11 +154,11 @@ function Get-TargetADGroups {
 
     }
 
-   return $Groups
+    return $Groups
 }
 
 function Connect-365Services {
-       [CmdletBinding()]
+    [CmdletBinding()]
     param (
         [switch]$Install,
         [switch]$Import,
@@ -142,9 +177,9 @@ function Connect-365Services {
 
     }elseif ($Connect) {
 
-        Connect-MgGraph -Scopes "User.Read.All", "Group.ReadWrite.All"
+        Connect-ExchangeOnline
 
-    }elseif ($ImportGraph){
+    }elseif ($Import){
 
         Import-Module -Name ExchangeOnlineManagement -Force
     }
@@ -163,25 +198,6 @@ function Connect-365Services {
     #>
 }
 
-
-# TODO refactor this for exchange
-function IsGraphConnected {
-
-$AdminUser = Read-Host "Enter the email of the admin account used to conenct to Graph" 
-
-    If (Get-MGUser -UserId "$($AdminUser)"){
-
-        return $true
-
-    }else{
-
-        return $false
-
-    }
-
-
-}
-
 function Get-CloudGroups {
     [CmdletBinding()]
     param (
@@ -196,7 +212,7 @@ function Get-CloudGroups {
     )
     
     $ADGroups = Get-TargetADGroups -OrgUnit $OrgUnit -GroupType $GroupType
- 
+
     $CloudGroups = @()
 
 foreach($Group in $ADGroups) {
@@ -216,13 +232,14 @@ foreach($Group in $ADGroups) {
     
         if ($SavetoFile){
 
-    $CloudGroups | Export-Csv -Path "$env:USERPROFILE\Documents\PreMigrationReport_CloudGroups.csv" -NoTypeInformation
-
+            $CloudGroups | Export-Csv -Path "$env:USERPROFILE\Documents\PreMigrationReport_CloudGroups.csv" -NoTypeInformation
+            
+            
         }
-    return $CloudGroups
+
+        return $CloudGroups
     }
 }
-
 function Remove-CloudGroups {
             [CmdletBinding(DefaultParameterSetName = "Remove")]
     param (
@@ -248,8 +265,6 @@ function New-CloudGroups{
         [Parameter(Mandatory = $true)]
         [string]$GroupID
 
-
-
     )
 
 }
@@ -260,13 +275,29 @@ function IsNugetInstalled {
 
 }
 
+function Restart-ScriptSession
+{
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$true)]
+        [string]$OrgUnit,
+        [Parameter()]
+        [ValidateSet("Universal", "DomainLocal")]
+        [string]$GroupType = "Universal",
+        [Parameter()]
+        [bool]$SavetoFile
+    )
+    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`" -OrgUnit $($OrgUnit) -GroupType $($GroupType) -SavetoFile $($SavetoFile)"
+    Stop-Process -Id $PID -Force
+}
 
 #Get-TargetADGroups -OrgUnit "Migrated Distros - Unsynced Folder" -GroupType "Universal"
 ######
 ## START SCRIPT
 ######
 
-
+Write-Host "Main"
+pause
 if (!(Test-Path -Path $Global:PreMigrationReport)){
 
     try {
@@ -279,20 +310,22 @@ if (!(Test-Path -Path $Global:PreMigrationReport)){
         New-MigrationLog -Type Error
     }
 
-}else{
+} else{
 
     New-MigrationLog -Type Success -Message "AD Groups with Users has been backed up to $($PreMigrationReport)"
 
 }
 
-
+pause
 
 New-MigrationLog -Type Info -Message "Checking execution policy..."
 if ((Get-ExecutionPolicy -Scope Process) -notin @("Bypass", "Unrestricted") -and (Get-ExecutionPolicy) -ne "Unrestricted") {
     New-MigrationLog -Type Info -Message "Policy current set to [$(Get-ExecutionPolicy -Scope Process)]. Bypass or Unrestricted required: Restarting script."
-    Restart-ScriptSession
+    pause
+    #Restart-ScriptSession -OrgUnit $OrgUnit -GroupType $GroupType -SavetoFile $SavetoFile
 }
 
+pause
 
 New-MigrationLog -Type Info -Message "Valid execution policy set"
 
@@ -315,47 +348,44 @@ if ($null -eq (Get-Module -ListAvailable ExchangeOnlineManagement))
 
     New-MigrationLog -Type info  -Message "Missing Exchange module Installing module..."
 
-    Connect-365Services -Install
+    try{
+        Connect-365Services -Install
+    } catch
+    {
+        New-MigrationLog -type info -message "Authentication failed. Script aborted!"
+    }
 
     New-MigrationLog -Type info  -Message "Module installed Restarting script..."
 
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`""
+    #Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`""
 
     New-MigrationLog -Info -Message "Terminating previous session and continuing execution in new session"
 
-    Stop-Process -Id $PID -Force
+    #Stop-Process -Id $PID -Force
 
     } catch {
 
         New-MigrationLog -Type Error
         
-        Stop-ScriptExecution -ExitScript
+        #Stop-ScriptExecution -ExitScript
     }
 
 } else {
 
     New-MigrationLog -Type Info -Message "Importing module: [ExchangeOnlineManagement]"
-
+    Write-Host "Imporint via 'Connect-365'"
+    pause
     Connect-365Services -Import
+    Write-Host "Done"
+    pause
 }
 
-
+pause
 # Everything below this comment should start in a new session
 
 New-MigrationLog -Info -Message "Connecting to Exchange Online..."
-
+pause
 Connect-365Services -Connect
 
-if (IsGraphConnected) {
-    New-MigrationLog -Type Success -Message "You are connected to Graph"
-
-    New-MigrationLog -Type Info -Message "Starting backup of groups and users"
-
-
-}
-
-$ADGroups
-
-
-
-
+Write-Host 'at end'
+pause
