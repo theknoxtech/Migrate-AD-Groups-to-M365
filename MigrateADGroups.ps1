@@ -1,5 +1,3 @@
-
-
 function Get-TargetADGroups {
     [CmdletBinding()]
     param (
