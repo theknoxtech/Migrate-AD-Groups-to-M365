@@ -2,9 +2,12 @@
 param(
     [Parameter(Mandatory=$true)]
     [string]$OrgUnit,
-    [Parameter()]
-    [ValidateSet("Universal", "DomainLocal")]
-    [string]$GroupType = "Universal",
+    [Parameter(Mandatory=$true)]
+    [ValidateSet("Universal","DomainLocal","Global")]
+    [string]$GroupScope,
+    #[Parameter()]
+    # [ValidateSet("Security","Distribution")]
+    # [string]$GroupType,
     [Parameter()]
     [bool]$SavetoFile = $false
 )
@@ -34,24 +37,29 @@ param(
 #     Stop-Process -Id $PID -Force
 # }
 
-pause
 
 if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
     Write-Host "Process requires elevated rights...`n`tElevating to administrator..."
 
-    Start-Process -FilePath "powershell.exe" -ArgumentList "-File `"$($PSCommandPath)`" -OrgUnit `"$($OrgUnit)`" -GroupType $($GroupType)" -Verb runas
-    Stop-Process -Id $PID -Force
+    Start-Process -FilePath "powershell.exe" -ArgumentList @(
+    "-File", "`"$PSCommandPath`"",
+    "-OrgUnit", "`"$OrgUnit`"",
+    "-GroupScope", "$GroupScope"
+) -Verb RunAs
+
+    #Start-Process -FilePath "powershell.exe" -ArgumentList @("-File", "`"$($PSCommandPath)`"", "-OrgUnit","`"$($OrgUnit)`"", "-GroupScope", "`"$($GroupScope)`"") -Verb runas
+    #Stop-Process -Id $PID -Force
 }
 
-pause
+
 
 #Global Variables
 $Global:PreMigrationReport = "$env:USERPROFILE\Documents\PreMigrationReport_ADGroups.csv"
 $Global:PreCloudGroupRemovalReport = "$env:USERPROFILE\Documents\PreCloudRemovalReport_M365Groups.csv"
 $global:TimeStamp = (Get-Date).ToString("MM/dd/yyyy HH:mm:ss")
 
-pause
-
+Pause
+Write-Host "Line 57"
 function New-MigrationLog {
     param(
         [Logs]$Type,
@@ -95,6 +103,14 @@ function Stop-ScriptExecution {
     }
 }
 
+function Get-OUDistinguishedName{
+    param(
+        [string]$OrgUnit
+    )
+    $DistinguishedName = Get-ADOrganizationalUnit -Filter "Name -like '$($OrgUnit)'" | Select-Object -ExpandProperty DistinguishedName
+
+    return $DistinguishedName
+}  
 
 
 function Get-TargetADGroups {
@@ -104,17 +120,20 @@ function Get-TargetADGroups {
         [string]$OrgUnit,
 
         [Parameter(Mandatory = $true)]
-        [string]$GroupType,
+        [string]$GroupScope,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DistinguishedName,
 
         [Parameter()]
         [switch]$SavetoFile
 
 
     )
+    
+    $TargetOU = (Get-OUDistinguishedName -OrgUnit $OrgUnit)
 
-    $TargetOU = Get-ADOrganizationalUnit -Filter "Name -like '$($OrgUnit)'" | Select-Object -ExpandProperty DistinguishedName
-
-    $TargetGroups = Get-ADGroup -Filter "GroupScope -eq '$($GroupType)'"  -SearchBase $TargetOU -Property Mail | Select-Object Name, Mail
+    $TargetGroups = Get-ADGroup -Filter "GroupScope -eq '$($GroupScope)'" -SearchBase ($TargetOU) -Property Mail | Select-Object Name, Mail
 
     $Groups = @()
 
@@ -136,12 +155,12 @@ function Get-TargetADGroups {
             $Users = Get-ADUser -Identity $Member.SamAccountName -Properties Name, Mail
             
             foreach ($User in $Users) {
-
+        
             $GroupObject = New-Object PSObject -Property @{
-            "Group Name" = $Group.Name
-            "Group Email" = $Group.Mail
-            "Member Name" = $User.Name
-            "User Email" = $User.Mail
+            "GroupName" = $Group.Name
+            "GroupEmail" = $Group.Mail
+            "MemberName" = $User.Name 
+            "UserEmail" = $User.Mail # TODO Write in error handling at some point to handle users without email in the email field.
                 }
                 $Groups += $GroupObject
             }
@@ -157,61 +176,58 @@ function Get-TargetADGroups {
     return $Groups
 }
 
-function Connect-365Services {
-    [CmdletBinding()]
-    param (
-        [switch]$Install,
-        [switch]$Import,
-        [switch ]$Connect
+# function Connect-365Services {
+#     [CmdletBinding()]
+#     param (
+#         [switch]$Install,
+#         [switch]$Import,
+#         [switch ]$Connect
 
-        # TODO Incorporate at a later time
-        #[switch]$Exchange,
-        #[switch]$Teams
-    )
-
-    
-
-    if ($Install) {
-
-        Install-Module -Name ExchangeOnlineManagement -Force
-
-    }elseif ($Connect) {
-
-        Connect-ExchangeOnline
-
-    }elseif ($Import){
-
-        Import-Module -Name ExchangeOnlineManagement -Force
-    }
+#         # TODO Incorporate at a later time
+#         #[switch]$Exchange,
+#         #[switch]$Teams
+#     )
 
     
-    
-    <# TODO Incorporate at a later time
-    elseif ($Exchange) {
 
-        ExchangeOnlineManagement
+#     if ($Install) {
+
+#         Install-Module -Name ExchangeOnlineManagement -Force
+
+#     }elseif ($Connect) {
+
+#         Connect-ExchangeOnline
+
+#     }elseif ($Import){
+
+#         Import-Module -Name ExchangeOnlineManagement -Force
+#     }
+
+    
+    
+#     <# TODO Incorporate at a later time
+#     elseif ($Exchange) {
+
+#         ExchangeOnlineManagement
         
-    }elseif ($Teams) {
+#     }elseif ($Teams) {
 
-        MicrosoftTeams
-    }
-    #>
-}
+#         MicrosoftTeams
+#     }
+#     #>
+# }
 
+# Takes  [Array] from Get-TargetADGroups and return an [Array]
 function Get-CloudGroups {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [string]$OrgUnit,
-
-        [Parameter(Mandatory = $true)]
-        [string]$GroupType,
-
+        [Parameter()]
+        [Array]$Groups = (Get-TargetADGroups -OrgUnit $OrgUnit -GroupScope $GroupScope),
         [Parameter()]
         [switch]$SavetoFile
     )
     
-    $ADGroups = Get-TargetADGroups -OrgUnit $OrgUnit -GroupType $GroupType
+    $ADGroups = $Groups
 
     $CloudGroups = @()
 
@@ -222,10 +238,10 @@ foreach($Group in $ADGroups) {
     foreach ($Member in ($GroupMembers)){
 
         $GroupObject = New-Object PSObject -Property @{
-            "Group Display Name" = $Group.Name
-            "Group Email" = $Group.Email
-            "Member Email" = $Member.PrimarySMTPAddress
-            "Member Display Name" = $Member.DisplayName
+            "GroupDisplayName" = $Group.Name
+            "GroupEmail" = $Group.Email
+            "MemberEmail" = $Member.PrimarySMTPAddress
+            "MemberDisplayName" = $Member.DisplayName
             }
              $CloudGroups += $GroupObject
         }
@@ -283,46 +299,32 @@ function Restart-ScriptSession
         [string]$OrgUnit,
         [Parameter()]
         [ValidateSet("Universal", "DomainLocal")]
-        [string]$GroupType = "Universal",
+        [string]$GroupScope = "Universal",
         [Parameter()]
         [bool]$SavetoFile
     )
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`" -OrgUnit $($OrgUnit) -GroupType $($GroupType) -SavetoFile $($SavetoFile)"
+    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`" -OrgUnit $($OrgUnit) -GroupScope $($GroupScope) -SavetoFile $($SavetoFile)"
     Stop-Process -Id $PID -Force
 }
-
-#Get-TargetADGroups -OrgUnit "Migrated Distros - Unsynced Folder" -GroupType "Universal"
+Write-Host "Line 293"
+pause
+#Get-TargetADGroups -OrgUnit "Migrated Distros - Unsynced Folder" -GroupScope "Universal"
 ######
 ## START SCRIPT
 ######
-
-Write-Host "Main"
-pause
-if (!(Test-Path -Path $Global:PreMigrationReport)){
-
-    try {
-    
-        throw "Pre-Migration Report NOT found, Exiting script"
-
-    }
-    catch {
-
-        New-MigrationLog -Type Error
-    }
-
-} else{
-
-    New-MigrationLog -Type Success -Message "AD Groups with Users has been backed up to $($PreMigrationReport)"
-
-}
-
+Write-Host "Line 299"
+#$OUDistinguishedName = Get-OUDistinguishedNameDistinguisedName -OrgUnit $OrgUnit
+Write-Host "Line 301"
+$DistinguishedName = Get-ADOrganizationalUnit -Filter "Name -like '$($OrgUnit)'" | Select-Object -ExpandProperty DistinguishedName
+Get-CloudGroups -Groups Get-TargetADGroups -OrgUnit $OrgUnit -GroupScope $GroupScope -DistinguishedName $DistinguishedName
+Write-Host "Line 303"
 pause
 
 New-MigrationLog -Type Info -Message "Checking execution policy..."
 if ((Get-ExecutionPolicy -Scope Process) -notin @("Bypass", "Unrestricted") -and (Get-ExecutionPolicy) -ne "Unrestricted") {
     New-MigrationLog -Type Info -Message "Policy current set to [$(Get-ExecutionPolicy -Scope Process)]. Bypass or Unrestricted required: Restarting script."
     pause
-    #Restart-ScriptSession -OrgUnit $OrgUnit -GroupType $GroupType -SavetoFile $SavetoFile
+    #Restart-ScriptSession -OrgUnit $OrgUnit -GroupScope $GroupScope -SavetoFile $SavetoFile
 }
 
 pause
@@ -349,7 +351,7 @@ if ($null -eq (Get-Module -ListAvailable ExchangeOnlineManagement))
     New-MigrationLog -Type info  -Message "Missing Exchange module Installing module..."
 
     try{
-        Connect-365Services -Install
+        Install-Module -Name ExchangeOnlineManagement -Force
     } catch
     {
         New-MigrationLog -type info -message "Authentication failed. Script aborted!"
@@ -357,17 +359,17 @@ if ($null -eq (Get-Module -ListAvailable ExchangeOnlineManagement))
 
     New-MigrationLog -Type info  -Message "Module installed Restarting script..."
 
-    #Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`""
+    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`""
 
     New-MigrationLog -Info -Message "Terminating previous session and continuing execution in new session"
 
-    #Stop-Process -Id $PID -Force
+    Stop-Process -Id $PID -Force
 
     } catch {
 
         New-MigrationLog -Type Error
         
-        #Stop-ScriptExecution -ExitScript
+        Stop-ScriptExecution -ExitScript
     }
 
 } else {
@@ -375,7 +377,7 @@ if ($null -eq (Get-Module -ListAvailable ExchangeOnlineManagement))
     New-MigrationLog -Type Info -Message "Importing module: [ExchangeOnlineManagement]"
     Write-Host "Imporint via 'Connect-365'"
     pause
-    Connect-365Services -Import
+    Import-Module -Name ExchangeOnlineManagement -Force
     Write-Host "Done"
     pause
 }
@@ -385,7 +387,32 @@ pause
 
 New-MigrationLog -Info -Message "Connecting to Exchange Online..."
 pause
-Connect-365Services -Connect
+Connect-ExchangeOnline
 
-Write-Host 'at end'
+New-MigrationLog -Type Info -Message "Starting Active Directory group migration"
+
+New-MigrationLog -Type Info -Message "Getting groups and group members from: $($OrgUnit)"
+
+Get-TargetADGroups -OrgUnit $OrgUnit -GroupScope $GroupScope
+
+
+
+if (!(Test-Path -Path $Global:PreMigrationReport)){
+
+    try {
+    
+        throw "Pre-Migration Report NOT found, Exiting script"
+
+    }
+    catch {
+
+        New-MigrationLog -Type Error
+    }
+
+} else{
+
+    New-MigrationLog -Type Success -Message "AD Groups with Users has been backed up to $($PreMigrationReport)"
+
+}
+
 pause
