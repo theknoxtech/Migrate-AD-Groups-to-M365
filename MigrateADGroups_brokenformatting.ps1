@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter(Mandatory=$true,Position=0,ValueFromPipeline,ValueFromPipelineByPropertyName,HelpMessage="Enter the OU that you want to process in double quotes")]
     [Alias("DistinguishedName")]
@@ -147,7 +147,7 @@ function Get-TargetADGroups {
             $GroupObject = New-Object PSObject -Property @{
             "GroupName" = $Group.Name
             "GroupEmail" = $Group.Mail
-            "UserName" = $User.Name 
+            "MemberName" = $User.Name 
             "UserEmail" = $User.Mail # TODO Write in error handling at some point to handle users without email in the email field.
                 }
                 $Groups += $GroupObject
@@ -169,44 +169,46 @@ function Get-CloudGroups {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory=$true,Position=0,ValueFromPipeline)]
-        [PSCustomObject]$InputObject,
+        [PSCustomObject]$Groups,
         [Parameter()]
         [switch]$SavetoFile
     )
-
-    Begin {
-    $CloudGroups = @()
-    }
-
-    Process {
-        foreach($Object in $InputObject) {
-        $TargetGroup = Get-DistributionGroup -Identity $InputObject.GroupEmail
-
-            foreach ($Group in $TargetGroup){
-
-                $GroupMembers = Get-DistributionGroupMember -Identity $TargetGroup.Identity
     
-                    foreach ($User in ($GroupMembers)){
-                        $CloudGroups += New-Object PSObject -Property @{
-                            "GroupDisplayName" = $InputObject.GroupName
-                            "GroupEmail" = $InputObject.GroupEmail
-                            "UserDisplayName" = $User.DisplayName
-                            "UserEmail" = $User.PrimarySmtpAddress
-                
+    Write-Verbose "Got group: $($Group | Out-String)"    
+
+    $CloudGroups = @()
+
+    if (!($Groups)){
+        return 
+    }
+    else{
+        foreach($Group in $Groups) {
+        $TargetGroup = Get-DistributionGroup -Identity $Group.GroupEmail
+
+        $GroupMembers = Get-DistributionGroupMember -Identity $TargetGroup.Identity
+    
+        foreach ($Member in ($GroupMembers)){
+
+            $GroupObject = New-Object PSObject -Property @{
+                "GroupDisplayName" = $Group.Name
+                "GroupEmail" = $Group.Email
+                "MemberEmail" = $Member.PrimarySMTPAddress
+                "MemberDisplayName" = $Member.DisplayName
                 }
+                 $CloudGroups += $GroupObject
             }
+    
+            if ($SavetoFile){
+
+                $CloudGroups | Export-Csv -Path "$env:USERPROFILE\Documents\PreMigrationReport_CloudGroups.csv" -NoTypeInformation
+            
+            
+            }
+
+            return $CloudGroups
         }
     }
 }
-    End {
-        if ($SavetoFile){
-                $CloudGroups | Export-Csv -Path "$env:USERPROFILE\Documents\PreMigrationReport_CloudGroups.csv" -NoTypeInformation
-            }
-    
-    return $CloudGroups
-    }
-}
-
 function Remove-CloudGroups {
             [CmdletBinding(DefaultParameterSetName = "Remove")]
     param (
@@ -263,10 +265,13 @@ pause
 ######
 ## START SCRIPT
 ######
-
+Write-Host "Line 299"
+#$OUDistinguishedName = Get-OUDistinguishedNameDistinguisedName -OrgUnit $OrgUnit
+Write-Host "Line 301"
 $Groups = Get-TargetADGroups -OrgUnit $Orgunit.Trim('"') -GroupScope $GroupScope
-$Groups | Where-Object {$_ -ne $null} | Get-CloudGroups 
-
+$Groups | Where-Object {$_ -ne $null} | Get-CloudGroups -SavetoFile
+Write-Host "Line 303"
+pause
 
 New-MigrationLog -Type Info -Message "Checking execution policy..."
 if ((Get-ExecutionPolicy -Scope Process) -notin @("Bypass", "Unrestricted") -and (Get-ExecutionPolicy) -ne "Unrestricted") {
