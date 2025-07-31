@@ -14,29 +14,25 @@ param(
 )
 
 
-# Elevate session if not running with privileged rights
-#[Security.Principal.WindowsIdentity]::GetCurrent()
-# if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([security.principal.windowsbuiltinrole]::Administrator))
-# {
-#     Write-Host "Process requires elevated rights...`n`tElevating to administrator..."
-#     $argsList = @(
-#         "-NoProfile",
-#         "-ExecutionPolicy Bypass",
-#         "-File $PSCommandPath"
-#     )
-
-#     $PSBoundParameters.GetEnumerator() | ForEach-Object {
-#         $argsList += "-$($_.Key) `"$($_.Value)`""
-
-#         #$argsList += "-$($_.Key)"
-#         #$argsList += "`"$($_.Value)`""
-#     }
-
-#     Write-Host $argsList
-
-#     Start-Process -FilePath "powershell.exe" -ArgumentList $argsList -Verb runas -NoNewWindow:$true
-#     Stop-Process -Id $PID -Force
-# }
+<#
+ Elevate session if not running with privileged rights
+[Security.Principal.WindowsIdentity]::GetCurrent()
+ if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdenti3ty]::GetCurrent()).IsInRole([security.principal.windowsbuiltinrole]::Administrator))
+ {
+     Write-Host "Process requires elevated rights...`n`tElevating to administrator..."
+     $argsList = @(
+         "-NoProfile",
+         "-ExecutionPolicy Bypass",
+         "-File $PSCommandPath"
+     )
+     $PSBoundParameters.GetEnumerator() | ForEach-Object {
+         $argsList += "-$($_.Key) `"$($_.Value)`""
+         #$argsList += "-$($_.Key)"
+         #$argsList += "`"$($_.Value)`""
+     }
+     Write-Host $argsList
+     Start-Process -FilePath "powershell.exe" -ArgumentList $argsList -Verb runas -NoNewWindow:$true
+#> 
 
 
 if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
@@ -59,8 +55,8 @@ $Global:PreMigrationReport = "$env:USERPROFILE\Documents\PreMigrationReport_ADGr
 $Global:PreCloudGroupRemovalReport = "$env:USERPROFILE\Documents\PreCloudRemovalReport_M365Groups.csv"
 $global:TimeStamp = (Get-Date).ToString("MM/dd/yyyy HH:mm:ss")
 
-Pause
-Write-Host "Line 57"
+
+# Logs to console and to file
 function New-MigrationLog {
     param(
         [Logs]$Type,
@@ -90,6 +86,8 @@ function New-MigrationLog {
     }
 }
 
+
+# Stops stript execution and logs to console and file
 function Stop-ScriptExecution {
     param (
         [switch]$ExitScript
@@ -104,6 +102,7 @@ function Stop-ScriptExecution {
     }
 }
 
+# Takes [string] for the OU and gets the groups and members of the OU, returns [pscustomobject]
 function Get-TargetADGroups {
     [CmdletBinding()]
     param (
@@ -116,8 +115,6 @@ function Get-TargetADGroups {
 
         [Parameter()]
         [switch]$SavetoFile
-
-
     )
 
     if ($OrgUnit -notmatch "^OU=.+m=,") {
@@ -126,9 +123,6 @@ function Get-TargetADGroups {
 
         $DistinguishedName.DistinguishedName
     }
-   
-
-
     $TargetGroups = Get-ADGroup -Filter "GroupScope -eq '$($GroupScope)'" -SearchBase ($DistinguishedName) -Property Mail | Select-Object Name, Mail
 
     $Groups = @()
@@ -164,7 +158,7 @@ function Get-TargetADGroups {
     return $Groups
 }
 
-# Takes  [Array] from Get-TargetADGroups and return an [Array]
+# Takes  [pscustomobject] from Get-TargetADGroups and queries Excahnge Online for the groups and members in the cloud
 function Get-CloudGroups {
     [CmdletBinding()]
     param (
@@ -257,15 +251,11 @@ function Restart-ScriptSession
     Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`" -OrgUnit $($OrgUnit) -GroupScope $($GroupScope) -SavetoFile $($SavetoFile)"
     Stop-Process -Id $PID -Force
 }
-Write-Host "Line 293"
-pause
-#Get-TargetADGroups -OrgUnit "Migrated Distros - Unsynced Folder" -GroupScope "Universal"
+
+
 ######
 ## START SCRIPT
 ######
-
-$Groups = Get-TargetADGroups -OrgUnit $Orgunit.Trim('"') -GroupScope $GroupScope
-$Groups | Where-Object {$_ -ne $null} | Get-CloudGroups 
 
 
 New-MigrationLog -Type Info -Message "Checking execution policy..."
@@ -311,7 +301,7 @@ if ($null -eq (Get-Module -ListAvailable ExchangeOnlineManagement))
 
     New-MigrationLog -Info -Message "Terminating previous session and continuing execution in new session"
 
-    Stop-Process -Id $PID -Force
+    #Stop-Process -Id $PID -Force
 
     } catch {
 
@@ -324,24 +314,27 @@ if ($null -eq (Get-Module -ListAvailable ExchangeOnlineManagement))
 
     New-MigrationLog -Type Info -Message "Importing module: [ExchangeOnlineManagement]"
     Write-Host "Imporint via 'Connect-365'"
-    pause
+    
     Import-Module -Name ExchangeOnlineManagement -Force
-    Write-Host "Done"
-    pause
+  
 }
 
-pause
+
 # Everything below this comment should start in a new session
 
 New-MigrationLog -Info -Message "Connecting to Exchange Online..."
-pause
+
 Connect-ExchangeOnline
 
 New-MigrationLog -Type Info -Message "Starting Active Directory group migration"
 
 New-MigrationLog -Type Info -Message "Getting groups and group members from: $($OrgUnit)"
 
-Get-TargetADGroups -OrgUnit $OrgUnit -GroupScope $GroupScope
+
+# Gather backup reports
+Get-TargetADGroups -OrgUnit $OrgUnit -GroupScope $GroupScope -SavetoFile
+$CloudGroups = Get-TargetADGroups -OrgUnit $Orgunit.Trim('"') -GroupScope $GroupScope
+$CloudGroups | Where-Object {$_ -ne $null} | Get-CloudGroups -SavetoFile
 
 
 
@@ -349,8 +342,12 @@ if (!(Test-Path -Path $Global:PreMigrationReport)){
 
     try {
     
-        throw "Pre-Migration Report NOT found, Exiting script"
+        Get-TargetADGroups -OrgUnit $OrgUnit -GroupScope $GroupScope -SavetoFile
 
+        if (Test-Path -Path $Global:PreMigrationReport){
+
+            New-MigrationLog -Type Info -message "AD Groups with Users has been backed up to $($PreMigrationReport)" 
+        }
     }
     catch {
 
@@ -363,4 +360,25 @@ if (!(Test-Path -Path $Global:PreMigrationReport)){
 
 }
 
-pause
+if (!(Test-Path -Path $Global:PreCloudGroupRemovalReport)){
+
+    try {   
+         if (Test-Path -Path $Global:PreCloudGroupRemovalReport){
+            
+            New-MigrationLog -Type Info -message "AD Groups with Users has been backed up to $($PreCloudGroupRemovalReport)"
+
+            
+        }
+
+    }
+    catch {
+
+        New-MigrationLog -Type Error
+    }
+
+} else{
+
+    New-MigrationLog -Type Success -Message "Cloud Groups with Users has been backed up to $($PreCloudGroupRemovalReport)"
+
+}
+
