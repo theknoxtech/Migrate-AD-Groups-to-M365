@@ -6,44 +6,24 @@ param(
     [Parameter(Mandatory=$true,Position=1,ValueFromPipeline,HelpMessage="Enter Universal, DomainLocal, or Global with NO double quotes")]
     [ValidateSet("Universal","DomainLocal","Global")]
     [string]$GroupScope,
-    #[Parameter()]
-    # [ValidateSet("Security","Distribution")]
-    # [string]$GroupType,
     [Parameter()]
-    [bool]$SavetoFile = $false
+    [bool]$SavetoFile,
+    [int]$CurrentInstance = [System.Diagnostics.Process]::GetProcessById($PID)
 )
 
-
-<#
- Elevate session if not running with privileged rights
-[Security.Principal.WindowsIdentity]::GetCurrent()
- if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdenti3ty]::GetCurrent()).IsInRole([security.principal.windowsbuiltinrole]::Administrator))
- {
-     Write-Host "Process requires elevated rights...`n`tElevating to administrator..."
-     $argsList = @(
-         "-NoProfile",
-         "-ExecutionPolicy Bypass",
-         "-File $PSCommandPath"
-     )
-     $PSBoundParameters.GetEnumerator() | ForEach-Object {
-         $argsList += "-$($_.Key) `"$($_.Value)`""
-         #$argsList += "-$($_.Key)"
-         #$argsList += "`"$($_.Value)`""
-     }
-     Write-Host $argsList
-     Start-Process -FilePath "powershell.exe" -ArgumentList $argsList -Verb runas -NoNewWindow:$true
-#> 
-
+#$CurrentPSSession = [System.Diagnostics.Process]::GetProcessById($this)
 
 if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
     Write-Host "Process requires elevated rights...`n`tElevating to administrator..."
 
     Start-Process -FilePath "powershell.exe" -ArgumentList @(
     "-File", "`"$PSCommandPath`"",
-    "-OrgUnit", "`"$OrgUnit`"",
-    "-GroupScope", "$GroupScope"
+    "-OrgUnit", "`"$($OrgUnit)`"",
+    "-GroupScope", "$GroupScope",
+    "-CurrentInstacne", "$CurrentInstance"
 ) -Verb RunAs
 
+    Stop-Process -Id $CurrentInstance -Force
     #Start-Process -FilePath "powershell.exe" -ArgumentList @("-File", "`"$($PSCommandPath)`"", "-OrgUnit","`"$($OrgUnit)`"", "-GroupScope", "`"$($GroupScope)`"") -Verb runas
     #Stop-Process -Id $PID -Force
 }
@@ -51,9 +31,9 @@ if (-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsI
 
 
 #Global Variables
-$Global:PreMigrationReport = "$env:USERPROFILE\Documents\PreMigrationReport_ADGroups.csv"
-$Global:PreCloudGroupRemovalReport = "$env:USERPROFILE\Documents\PreCloudRemovalReport_M365Groups.csv"
+$Global:LogPath = "$env:USERPROFILE\Documents\"
 $global:TimeStamp = (Get-Date).ToString("MM/dd/yyyy HH:mm:ss")
+
 
 
 # Logs to console and to file
@@ -69,7 +49,7 @@ function New-MigrationLog {
         Error
     }
 
-    $LogPath = "$env:USERPROFILE\Documents\Migration-Log.txt"
+    $FileLocation = "$global:Logpath\Migration-Log.txt"
     
 
     $console_logs = @{
@@ -79,9 +59,9 @@ function New-MigrationLog {
     }
 
     switch ($Type) {
-        ([Logs]::Info) {$console_logs.Info | Tee-Object -FilePath $LogPath -Append ; break}
-        ([Logs]::Success) {$console_logs.Success | Tee-Object -FilePath $LogPath -Append ; break }
-        ([Logs]::Error) {$console_logs.Error | Tee-Object -FilePath $LogPath -Append; break} 
+        ([Logs]::Info) {$console_logs.Info | Tee-Object -FilePath $FileLocation -Append ; break}
+        ([Logs]::Success) {$console_logs.Success | Tee-Object -FilePath $FileLocation -Append ; break }
+        ([Logs]::Error) {$console_logs.Error | Tee-Object -FilePath $FileLocation -Append; break} 
 
     }
 }
@@ -91,6 +71,7 @@ function New-MigrationLog {
 function Stop-ScriptExecution {
     param (
         [switch]$ExitScript
+    
     )
     $LogPath = "$env:USERPROFILE\Documents\Migration-Log.txt"
     $Failure =  "$($timestamp) : FAILURE: Script Halted at Line: $($MyInvocation.ScriptLineNumber) "
@@ -98,9 +79,48 @@ function Stop-ScriptExecution {
     if ($ExitScript){ 
 
         throw "$message`n  `n$($Failure)"  | Tee-Object -FilePath $LogPath -Append
-
     }
 }
+
+# Create a file based checkpoint
+function New-ScriptCheckpoint {
+    [CmdletBinding()]
+    Param(
+        [Parameter()]
+        [string]$FileName
+    )
+    $CheckPointLocation = "$Global:LogPath\Documents\"
+
+    if ($FileName) {
+
+        New-Item -Path $CheckPointLocation -ItemType File -Name $FileName
+
+        New-MigrationLog -Type info -Message "$($FileName) has been created at: $($CheckPointLocation)"
+    }
+
+
+}   
+
+# Checks for a file based checkpoint
+function Get-ScriptCheckpoint {
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [string]$FileName
+    )
+    $CheckPointLocation = "$Global:LogPath\Documents\"
+
+    if ($FileName) {
+
+        if (Get-Item -Path $CheckPointLocation -ItemType File -Name $FileName) {
+            return $true
+        }
+        else {
+            return $false
+        }
+    }
+  
+}   
 
 # Takes [string] for the OU and gets the groups and members of the OU, returns [pscustomobject]
 function Get-TargetADGroups {
@@ -149,9 +169,12 @@ function Get-TargetADGroups {
             
         }
     }
+
+    $PreMigrationReport = "$Global:LogPath\PreMigrationReport_ADGroups.csv"
+
     if ($SavetoFile){
 
-        $Groups | Export-Csv -Path "$env:USERPROFILE\Documents\PreMigrationReport_ADGroups.csv" -NoTypeInformation
+        $Groups | Export-Csv -Path $PreMigrationReport -NoTypeInformation
 
     }
 
@@ -193,8 +216,11 @@ function Get-CloudGroups {
     }
 }
     End {
+
+        $PreCloudGroupRemovalReport = "$Global:LogPath\PreCloudRemovalReport_M365Groups.csv"
+
         if ($SavetoFile){
-                $CloudGroups | Export-Csv -Path "$env:USERPROFILE\Documents\PreMigrationReport_CloudGroups.csv" -NoTypeInformation
+                $CloudGroups | Export-Csv -Path $PreCloudGroupRemovalReport -NoTypeInformation
             }
     
     return $CloudGroups
@@ -242,15 +268,18 @@ function Restart-ScriptSession
     Param(
         [Parameter(Mandatory=$true)]
         [string]$OrgUnit,
-        [Parameter()]
+        [Parameter(Mandatory=$true)]
         [ValidateSet("Universal", "DomainLocal", "Global")]
-        [string]$GroupScope = "Universal",
+        [string]$GroupScope,
         [Parameter()]
-        [bool]$SavetoFile
+        [bool]$SavetoFile = $false
     )
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`" -OrgUnit $($OrgUnit) -GroupScope $($GroupScope) -SavetoFile $($SavetoFile)"
-    Stop-Process -Id $PID -Force
+        Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File |
+        `"$($PSCommandPath)`" -OrgUnit $($OrgUnit.Trim()) -GroupScope $($GroupScope) -SavetoFile $($SavetoFile) "
+
+       
 }
+
 
 
 ######
@@ -261,12 +290,14 @@ function Restart-ScriptSession
 New-MigrationLog -Type Info -Message "Checking execution policy..."
 if ((Get-ExecutionPolicy -Scope Process) -notin @("Bypass", "Unrestricted") -and (Get-ExecutionPolicy) -ne "Unrestricted") {
     New-MigrationLog -Type Info -Message "Policy current set to [$(Get-ExecutionPolicy -Scope Process)]. Bypass or Unrestricted required: Restarting script."
-    pause
+   
     #Restart-ScriptSession -OrgUnit $OrgUnit -GroupScope $GroupScope -SavetoFile $SavetoFile
 }
 
-pause
-
+$CurrentPSSession = [System.Diagnostics.Process]::GetProcessById($this)
+Write-Host "The current session ID: $($CurrentPSSession)"
+Write-Host "Pause 1"
+Pause
 New-MigrationLog -Type Info -Message "Valid execution policy set"
 
 # Install Excahnge Online module
@@ -274,67 +305,85 @@ New-MigrationLog -Type Info -Message "Valid execution policy set"
 # Else shoud run when session restarts
 
 New-MigrationLog -Type Info -Message "Verifying Exchange module is installed..." 
+Write-Host "Pause 2"
 
 if ($null -eq (Get-Module -ListAvailable ExchangeOnlineManagement))
-{
-    try {
-
-    New-MigrationLog -Type info  -Message "Checking for Nuget and installing if needed"
-    
-    if (!(IsNugetInstalled)) {
-
-        Install-PackageProvider -Name Nuget -Force
-    }
-
+{  Write-Host "Pause 3"
+    Pause
     New-MigrationLog -Type info  -Message "Missing Exchange module Installing module..."
 
-    try{
-        Install-Module -Name ExchangeOnlineManagement -Force
-    } catch
-    {
-        New-MigrationLog -type info -message "Authentication failed. Script aborted!"
+    try {
+
+        New-MigrationLog -Type info  -Message "Checking for Nuget and installing if needed"
+    
+        if (!(IsNugetInstalled)) {
+
+            Install-PackageProvider -Name Nuget -Force
+        }
+    
+    } catch {
+
+        New-MigrationLog -type Error
+        # Stop-ScriptExecution -ExitScript
+
     }
 
-    New-MigrationLog -Type info  -Message "Module installed Restarting script..."
+    try{
+        
+        Install-Module -Name ExchangeOnlineManagement -Force
 
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$($PSCommandPath)`""
+        New-MigrationLog -Type info  -Message "Module installed Restarting script"
 
-    New-MigrationLog -Info -Message "Terminating previous session and continuing execution in new session"
-
-    #Stop-Process -Id $PID -Force
+        Write-Host "Script Restart 1"
 
     } catch {
 
-        New-MigrationLog -Type Error
-        
+        New-MigrationLog -type Error
         Stop-ScriptExecution -ExitScript
     }
-
-} else {
-
-    New-MigrationLog -Type Info -Message "Importing module: [ExchangeOnlineManagement]"
-    Write-Host "Imporint via 'Connect-365'"
-    
-    Import-Module -Name ExchangeOnlineManagement -Force
-  
 }
 
+
+Write-Host "Script Restart"
+Restart-ScriptSession -OrgUnit $OrgUnit -GroupScope $GroupScope  
+Write-Host "382"
+## TODO CheckPointOne Here
+
+New-MigrationLog -Type Info -Message "Importing module: [ExchangeOnlineManagement]"
+Write-Host "Importing Module  after restart"
+
+Import-Module -Name ExchangeOnlineManagement
 
 # Everything below this comment should start in a new session
 
 New-MigrationLog -Info -Message "Connecting to Exchange Online..."
 
-Connect-ExchangeOnline
+$ExchangeConnectionState = (Get-ConnectionInformation).state
+
+switch ($ExchangeConnectionState) {
+    ($_ -eq "Connected") {
+
+        New-MigrationLog -Type info -Message "Exchange Online is connected"
+
+        break}
+    ($_ -eq "Broken") {
+
+        Connect-ExchangeOnline 
+    }
+
+}
+
 
 New-MigrationLog -Type Info -Message "Starting Active Directory group migration"
 
-New-MigrationLog -Type Info -Message "Getting groups and group members from: $($OrgUnit)"
+New-MigrationLog -Type Info -Message "Getting AD groups and group members from: $($OrgUnit)"
 
+#$OrgUnit, $GroupScope = $OrgUnit, $GroupScope
 
 # Gather backup reports
 Get-TargetADGroups -OrgUnit $OrgUnit -GroupScope $GroupScope -SavetoFile
 $CloudGroups = Get-TargetADGroups -OrgUnit $Orgunit.Trim('"') -GroupScope $GroupScope
-$CloudGroups | Where-Object {$_ -ne $null} | Get-CloudGroups -SavetoFile
+
 
 
 
@@ -363,22 +412,21 @@ if (!(Test-Path -Path $Global:PreMigrationReport)){
 if (!(Test-Path -Path $Global:PreCloudGroupRemovalReport)){
 
     try {   
+
+        $CloudGroups | Where-Object {$_ -ne $null} | Get-CloudGroups -SavetoFile
+
          if (Test-Path -Path $Global:PreCloudGroupRemovalReport){
             
             New-MigrationLog -Type Info -message "AD Groups with Users has been backed up to $($PreCloudGroupRemovalReport)"
-
-            
         }
-
     }
     catch {
 
         New-MigrationLog -Type Error
     }
-
 } else{
 
     New-MigrationLog -Type Success -Message "Cloud Groups with Users has been backed up to $($PreCloudGroupRemovalReport)"
-
 }
 
+## TODO CheckPoinntTwo here
