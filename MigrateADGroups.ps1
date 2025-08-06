@@ -127,11 +127,11 @@ function Get-ScriptCheckpoint {
 
     if ($FileName) {
 
-        if (Get-Item -Path $CheckPointLocation -ItemType File -Name $FileName) {
-            return $true
+        if (Get-ChildItem -Path $CheckPointLocation -Name $FileName -ErrorAction SilentlyContinue)  {
+            return "Exists"
         }
         else {
-            return $false
+            return "Not Exists"
         }
     }
   
@@ -301,12 +301,13 @@ Stop-Process $PID
 ######
 
 # Checkpoint Switch 
-
+pause 
+Write-Host "305"
 $IsFileExists = Get-ScriptCheckpoint -FileName "CheckPoint_1"
+# TODO get switch working
 
-switch ($IsFileExists){
 
-    ($true) {
+if (($IsFileExists -eq "Not Exists")){
 
      New-MigrationLog -Type Info -Message "Checking execution policy..."
 
@@ -354,25 +355,35 @@ Pause
         New-MigrationLog -type Error
         Stop-ScriptExecution -ExitScript
     }
-}
+
+
+    New-MigrationLog -Info -Message "Generating checkpoint at: $($Global:LogPath)"
+    New-ScriptCheckpoint -FileName "CheckPoint_1"
 
 Write-Host "Line 345"
-    New-MigrationLog -Type Info -message  "Script is restarting"
 
-# TODO Add module import and checkpoint
-    Start-Process -FilePath "powershell.exe" -ArgumentList @(
-        "-File", "`"$PSCommandPath`"",
-        # "-OrgUnit", "`"$OrgUnit`"",
-        # "-GroupScope", "`"$GroupScope`""
-    ) -WindowStyle Normal
+    New-MigrationLog -Type Info -message  "Script is restarting" 
+    try {
+        if (Get-ScriptCheckpoint -FileName "Checkpoint_1"){
+            Start-Process -FilePath "powershell.exe" -ArgumentList @(
+                "-File", "`"$PSCommandPath`""
+                "-OrgUnit", "`"$OrgUnit`"",
+                "-GroupScope", "`"$GroupScope`"",
+                "-SavetoFile", "`"$SavetoFile`""
 
-    Stop-Process $PID
+            ) -WindowStyle Normal
 
+            
+        }
+        Stop-Process $PID
     }
-
-    ## If $IsFileExists is $false
-    ($false) {
+    catch {
         
+        New-MigrationLog -type Error
+    }
+    }
+}
+elseif ($IsFileExists -eq "Exists") {
         New-MigrationLog -Type Info -Message "Importing module: [ExchangeOnlineManagement]"
         New-MigrationLog -Type Info -message "Importing Module after restart"
 
@@ -455,9 +466,8 @@ if (!(Test-Path -Path "$Global:LogPath\PreMigrationCloudGroups_Backup.csv")){
     New-MigrationLog -Type Success -Message "Cloud Groups with Users has been backed up to $("$Global:LogPath\PreMigrationCloudGroups_Backup.csv")"
 }
 
-        New-ScriptCheckpoint -FileName "CheckPoint_1"
-    }
 }
+
 
 
 
