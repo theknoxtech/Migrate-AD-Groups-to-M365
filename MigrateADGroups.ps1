@@ -152,12 +152,14 @@ function Get-TargetADGroups {
         [switch]$SavetoFile
     )
 
-    if ($OrgUnit -notmatch "^OU=.+m=,") {
+    if ($OrgUnit -notmatch "^OU=") {
 
-        $DistinguishedName = (Get-ADOrganizationalUnit -Filter "Name -eq '$($OrgUnit)'").distinguishedname 
-
-        $DistinguishedName.DistinguishedName
+        $DistinguishedName = (Get-ADOrganizationalUnit -Filter "Name -eq '$($OrgUnit)'").DistinguishedName
     }
+    else {
+        $DistinguishedName = $OrgUnit
+    }
+
     $TargetGroups = Get-ADGroup -Filter "GroupScope -eq '$($GroupScope)'" -SearchBase ($DistinguishedName) -Property Mail | Select-Object Name, Mail
 
     $Groups = @()
@@ -207,38 +209,36 @@ function Get-CloudGroups {
     )
 
     Begin {
-    $CloudGroups = @()
+        $CloudGroups = @()
     }
 
     Process {
-        foreach($Object in $InputObject) {
-        $TargetGroup = Get-DistributionGroup -Identity $InputObject.GroupEmail
+        foreach ($Object in $InputObject) {
+            $TargetGroup = Get-DistributionGroup -Identity $Object.GroupEmail
 
-            foreach ($Group in $TargetGroup){
+            foreach ($Group in $TargetGroup) {
+                $GroupMembers = Get-DistributionGroupMember -Identity $Group.Identity
 
-                $GroupMembers = Get-DistributionGroupMember -Identity $TargetGroup.Identity
-    
-                    foreach ($User in ($GroupMembers)){
-                        $CloudGroups += New-Object PSObject -Property @{
-                            "GroupDisplayName" = $InputObject.GroupName
-                            "GroupEmail" = $InputObject.GroupEmail
-                            "UserDisplayName" = $User.DisplayName
-                            "UserEmail" = $User.PrimarySmtpAddress
-                
+                foreach ($User in $GroupMembers) {
+                    $CloudGroups += New-Object PSObject -Property @{
+                        "GroupDisplayName" = $Object.GroupName
+                        "GroupEmail"       = $Object.GroupEmail
+                        "UserDisplayName"  = $User.DisplayName
+                        "UserEmail"        = $User.PrimarySmtpAddress
+                    }
                 }
             }
         }
     }
-}
-    End {
 
+    End {
         $PreCloudGroupRemovalReport = "$Global:LogPath\PreCloudRemovalReport_M365Groups.csv"
 
-        if ($SavetoFile){
-                $CloudGroups | Export-Csv -Path $PreCloudGroupRemovalReport -NoTypeInformation
-            }
-    
-    return $CloudGroups
+        if ($SavetoFile) {
+            $CloudGroups | Export-Csv -Path $PreCloudGroupRemovalReport -NoTypeInformation
+        }
+
+        return $CloudGroups
     }
 }
 
